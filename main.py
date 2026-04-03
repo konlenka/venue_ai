@@ -9,7 +9,7 @@ import json
 import logging
 import os
 from contextlib import asynccontextmanager
-from typing import Dict, List, Optional, Tuple
+from typing import List, Optional
 from urllib.parse import quote_plus
 
 import anthropic
@@ -33,7 +33,7 @@ MAX_SEARCH_RESULTS = 10
 
 # In-memory cache: (name_lower, suburb_lower) → ClassifyResponse
 # Persists for the lifetime of the Railway deployment.
-_cache: Dict[Tuple[str, str], ClassifyResponse] = {}
+_cache: dict = {}
 
 logging.basicConfig(
     level=logging.INFO,
