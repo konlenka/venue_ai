@@ -285,7 +285,10 @@ app = FastAPI(
 # Tighten origins to your Lovable app URL once you have it.
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["https://paramount-venue-spark.lovable.app"],
+    allow_origins=[
+        "https://paramount-venue-spark.lovable.app",
+        "https://venueai-production.up.railway.app",
+    ],
     allow_credentials=False,
     allow_methods=["GET", "POST"],
     allow_headers=["Content-Type"],
