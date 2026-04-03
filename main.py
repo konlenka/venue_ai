@@ -28,8 +28,9 @@ load_dotenv()
 MODEL = "claude-sonnet-4-6"
 CONFIDENCE_THRESHOLD = 75
 VALID_SEGMENTS = {"Bar", "Restaurant", "Pub", "Club", "Accommodation", "Caterer"}
-MAX_RESEARCH_CHARS = 8_000
-MAX_SEARCH_RESULTS = 10
+MAX_RESEARCH_CHARS = 15_000
+MAX_SEARCH_RESULTS = 12
+MAX_RAW_CONTENT_PER_RESULT = 800  # chars of raw page content to include per result
 
 # In-memory cache: (name_lower, suburb_lower) → ClassifyResponse
 # Persists for the lifetime of the Railway deployment.
@@ -75,6 +76,23 @@ Return ONLY a valid JSON array of exactly 3 strings. No explanation. No markdown
 
 CLASSIFICATION_SYSTEM = """You are an expert classifier of Australian hospitality venues for a B2B sales team.
 Your job: assign exactly ONE segment from this list to a venue based on research evidence.
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+STRICT EVIDENCE RULES — READ BEFORE CLASSIFYING
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+1. NEVER classify based on the venue name alone. Names are misleading.
+   ("The Hotel" could be a pub, not a hotel. "Restaurant X" could be a bar.)
+2. You MUST find at least 2 of the following before classifying above 75% confidence:
+   - A menu (food or drinks) that reveals the primary offering
+   - An explicit category label from Google Maps, TripAdvisor, or Zomato
+   - A description from the venue's own website or a credible review
+   - Opening hours pattern that reveals the business type (e.g. late-night = bar)
+3. Prioritise evidence in this order (most reliable first):
+   a. Google Maps / TripAdvisor category label (e.g. "Cocktail bar", "Restaurant", "Pub")
+   b. The venue's own website menu or "About" page content
+   c. Food/drinks items visible in reviews or booking platforms
+   d. Reviewer descriptions of what customers do there (eat vs drink)
+4. If you cannot find clear evidence, set confidence below 60. Do NOT guess.
 
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 SEGMENT DEFINITIONS
@@ -409,9 +427,9 @@ async def run_tavily_searches(tavily: AsyncTavilyClient, queries: List[str]) -> 
         return await tavily.search(
             query=query,
             search_depth="advanced",
-            max_results=5,
+            max_results=7,
             include_answer=False,
-            include_raw_content=False,
+            include_raw_content=True,  # Get actual page text: menus, profile descriptions, reviews
         )
 
     results = await asyncio.gather(*[search_one(q) for q in queries], return_exceptions=True)
@@ -441,13 +459,17 @@ async def run_tavily_searches(tavily: AsyncTavilyClient, queries: List[str]) -> 
     deduped = sorted(seen_urls.values(), key=lambda x: x.get("score", 0), reverse=True)
     top = deduped[:MAX_SEARCH_RESULTS]
 
-    # Format into a text block for Claude
+    # Format into a text block for Claude — include truncated raw page content where available
     lines = []
     for i, item in enumerate(top, 1):
         lines.append(f"[Result {i}]")
         lines.append(f"Title: {item.get('title', 'N/A')}")
         lines.append(f"URL: {item.get('url', 'N/A')}")
-        lines.append(f"Content: {item.get('content', 'N/A')}")
+        lines.append(f"Summary: {item.get('content', 'N/A')}")
+        raw = item.get("raw_content") or ""
+        if raw:
+            truncated = raw[:MAX_RAW_CONTENT_PER_RESULT].strip()
+            lines.append(f"Page content: {truncated}")
         lines.append("---")
 
     research_text = "\n".join(lines)
