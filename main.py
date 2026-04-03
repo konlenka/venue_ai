@@ -9,7 +9,8 @@ import json
 import logging
 import os
 from contextlib import asynccontextmanager
-from typing import List, Optional
+from typing import Dict, List, Optional, Tuple
+from urllib.parse import quote_plus
 
 import anthropic
 from dotenv import load_dotenv
@@ -29,6 +30,10 @@ CONFIDENCE_THRESHOLD = 75
 VALID_SEGMENTS = {"Bar", "Restaurant", "Pub", "Club", "Accommodation", "Caterer"}
 MAX_RESEARCH_CHARS = 8_000
 MAX_SEARCH_RESULTS = 10
+
+# In-memory cache: (name_lower, suburb_lower) → ClassifyResponse
+# Persists for the lifetime of the Railway deployment.
+_cache: Dict[Tuple[str, str], ClassifyResponse] = {}
 
 logging.basicConfig(
     level=logging.INFO,
@@ -161,17 +166,28 @@ CONFIDENCE GUIDE
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 SALES PLAYBOOK RULES
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-Generate exactly 3 concise, actionable bullet points for a sales rep approaching this specific venue.
-Base them on the segment AND specific context from the research (cocktail menu, gaming machines,
-kitchen focus, event spaces, etc.). Make each bullet feel personal to THIS venue, not generic.
+You are generating talking points for a Paramount Liquor sales rep. Paramount Liquor is one of
+Australia's largest liquor wholesalers — they supply wine, spirits, beer, and RTDs to licensed
+venues at competitive trade pricing with reliable delivery.
 
-Segment starting angles:
-- Bar: Premium spirits/cocktail packages. Late-night licensing support. Exclusive spirit partnerships.
-- Restaurant: Kitchen integration and menu pairing. Dining experience uplift. Wine/beverage programs.
-- Pub: TAB/gaming partnership angle. Tap beer packages. Bistro and catering support.
-- Club: Event/AV bundle packages. Volume discounts. Membership program tie-ins.
-- Accommodation: Room service tie-ins. Minibar stocking. Guest experience packages.
-- Caterer: Off-site delivery capabilities. Event logistics. Bulk supply agreements.
+Generate exactly 3 concise, actionable bullet points the rep can use in their first conversation
+with this venue. Each bullet should be a specific angle for selling Paramount's liquor wholesale
+products to THIS venue based on its type and context from the research.
+
+Segment angles for Paramount Liquor reps:
+- Bar: Lead with premium spirits and cocktail-base spirits supply — reference any specific spirits
+  or cocktail styles visible in research. Pitch Paramount's competitive pricing on high-velocity
+  spirits (gin, whisky, vodka). Mention exclusive label or allocated bottle access.
+- Restaurant: Pitch wine-by-the-glass programs and curated bottle lists. Emphasise Paramount's
+  sommelier support and food-pairing range. Reference any cuisine style to suggest matching varietals.
+- Pub: Lead with bulk beer and tap product supply — competitive kegs, craft beer range. Reference
+  gaming/TAB revenue as context for why reliable stock = reliable income. Pitch spirits for the bar.
+- Club: Volume pricing and account management for high-throughput venues. Pitch event stock packages
+  and RTD/beer bulk deals. Reference any gaming or function revenue visible in research.
+- Accommodation: Minibar restocking programs and in-room wine selections. Pitch function/event
+  liquor packages for weddings and corporate events. Emphasise reliable delivery SLAs.
+- Caterer: Flexible event-by-event ordering and short-lead-time delivery. Pitch mixed case options
+  and wine/beer packages tailored to event types (weddings, corporate, private dining).
 
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 OUTPUT FORMAT
@@ -189,8 +205,7 @@ Return ONLY this JSON. No explanation before or after. No markdown fences.
     "address": "<full street address if found in research, else null>",
     "phone": "<phone number if found, else null>",
     "website": "<website URL if found, else null>",
-    "hours": "<opening hours if found, else null>",
-    "google_maps_url": "<Google Maps URL if found, else null>"
+    "hours": "<opening hours if found, else null>"
   },
   "sales_playbook": [
     "<tailored next-action bullet 1 — specific to this venue's context>",
@@ -561,8 +576,14 @@ async def classify(request: ClassifyRequest, req: Request):
 
     business_name = request.business_name.strip()
     suburb = request.suburb.strip()
+    cache_key = (business_name.lower(), suburb.lower())
 
     logger.info(f"Classifying: '{business_name}' in '{suburb}'")
+
+    # ── Cache check ───────────────────────────────────────────────────────────
+    if cache_key in _cache:
+        logger.info(f"Cache HIT — returning stored result for '{business_name}' in '{suburb}'")
+        return _cache[cache_key]
 
     try:
         # ── Step 2: Generate search queries ──────────────────────────────────
@@ -593,16 +614,33 @@ async def classify(request: ClassifyRequest, req: Request):
             logger.info(
                 f"Retry pass: {classification['segment']} @ {classification['confidence']}% confidence"
             )
-            # No second judge — return retry result regardless
 
-        # ── Step 6: Return clean JSON ─────────────────────────────────────────
-        return ClassifyResponse(
+        # ── Step 6: Build response — Google Maps URL generated server-side ────
+        maps_query = quote_plus(f"{business_name} {suburb} Australia")
+        google_maps_url = f"https://www.google.com/maps/search/?api=1&query={maps_query}"
+
+        raw_profile = classification.get("venue_profile") or {}
+        venue_profile = VenueProfile(
+            address=raw_profile.get("address"),
+            phone=raw_profile.get("phone"),
+            website=raw_profile.get("website"),
+            hours=raw_profile.get("hours"),
+            google_maps_url=google_maps_url,  # Always reliable — built from venue name
+        )
+
+        response = ClassifyResponse(
             segment=classification["segment"],
             confidence=classification["confidence"],
             reasoning=classification["reasoning"],
-            venue_profile=classification.get("venue_profile"),
+            venue_profile=venue_profile,
             sales_playbook=classification.get("sales_playbook", []),
         )
+
+        # ── Cache the result ──────────────────────────────────────────────────
+        _cache[cache_key] = response
+        logger.info(f"Cached result for '{business_name}' in '{suburb}' (cache size: {len(_cache)})")
+
+        return response
 
     except HTTPException:
         raise  # Re-raise FastAPI exceptions unchanged
