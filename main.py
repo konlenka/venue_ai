@@ -25,7 +25,7 @@ load_dotenv()
 # Configuration
 # ---------------------------------------------------------------------------
 
-MODEL = "claude-sonnet-4-6"
+MODEL = "claude-opus-4-6"
 CONFIDENCE_THRESHOLD = 75
 VALID_SEGMENTS = {"Bar", "Restaurant", "Pub", "Club", "Accommodation", "Caterer"}
 MAX_RESEARCH_CHARS = 15_000
@@ -673,7 +673,7 @@ async def generate_search_queries(
         response = await client.messages.create(
             model=MODEL,
             max_tokens=256,
-            temperature=0.3,
+            temperature=0.0,
             system=system_prompt,
             messages=[{"role": "user", "content": user_message}],
         )
@@ -780,7 +780,7 @@ async def classify_venue(
     response = await client.messages.create(
         model=MODEL,
         max_tokens=1024,
-        temperature=0.1,
+        temperature=0.0,
         system=CLASSIFICATION_SYSTEM,
         messages=[{"role": "user", "content": user_message}],
     )
