@@ -24,7 +24,7 @@ load_dotenv()
 # Configuration
 # ---------------------------------------------------------------------------
 
-MODEL = "claude-3-5-sonnet-20241022"
+MODEL = "claude-sonnet-4-6"
 CONFIDENCE_THRESHOLD = 75
 VALID_SEGMENTS = {"Bar", "Restaurant", "Pub", "Club", "Accommodation", "Caterer"}
 MAX_RESEARCH_CHARS = 8_000
