@@ -159,6 +159,21 @@ CONFIDENCE GUIDE
 0-49:   Very sparse data, best guess only
 
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+SALES PLAYBOOK RULES
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+Generate exactly 3 concise, actionable bullet points for a sales rep approaching this specific venue.
+Base them on the segment AND specific context from the research (cocktail menu, gaming machines,
+kitchen focus, event spaces, etc.). Make each bullet feel personal to THIS venue, not generic.
+
+Segment starting angles:
+- Bar: Premium spirits/cocktail packages. Late-night licensing support. Exclusive spirit partnerships.
+- Restaurant: Kitchen integration and menu pairing. Dining experience uplift. Wine/beverage programs.
+- Pub: TAB/gaming partnership angle. Tap beer packages. Bistro and catering support.
+- Club: Event/AV bundle packages. Volume discounts. Membership program tie-ins.
+- Accommodation: Room service tie-ins. Minibar stocking. Guest experience packages.
+- Caterer: Off-site delivery capabilities. Event logistics. Bulk supply agreements.
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 OUTPUT FORMAT
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 Return ONLY this JSON. No explanation before or after. No markdown fences.
@@ -169,6 +184,18 @@ Return ONLY this JSON. No explanation before or after. No markdown fences.
     "<bullet 1: most important evidence — cite specific facts about this venue>",
     "<bullet 2: supporting evidence>",
     "<bullet 3: address any competing signals and explain why they were discounted>"
+  ],
+  "venue_profile": {
+    "address": "<full street address if found in research, else null>",
+    "phone": "<phone number if found, else null>",
+    "website": "<website URL if found, else null>",
+    "hours": "<opening hours if found, else null>",
+    "google_maps_url": "<Google Maps URL if found, else null>"
+  },
+  "sales_playbook": [
+    "<tailored next-action bullet 1 — specific to this venue's context>",
+    "<tailored next-action bullet 2>",
+    "<tailored next-action bullet 3>"
   ]
 }
 
@@ -241,10 +268,20 @@ class ClassifyRequest(BaseModel):
     )
 
 
+class VenueProfile(BaseModel):
+    address: Optional[str] = None
+    phone: Optional[str] = None
+    website: Optional[str] = None
+    hours: Optional[str] = None
+    google_maps_url: Optional[str] = None
+
+
 class ClassifyResponse(BaseModel):
     segment: str = Field(..., description="One of: Bar, Restaurant, Pub, Club, Accommodation, Caterer")
     confidence: int = Field(..., ge=0, le=100, description="Classification confidence 0-100")
     reasoning: List[str] = Field(..., min_length=1, description="Bullet-point reasoning")
+    venue_profile: Optional[VenueProfile] = Field(None, description="Contact info and location details")
+    sales_playbook: List[str] = Field(default_factory=list, description="Tailored next-action prompts for sales reps")
 
 
 class HealthResponse(BaseModel):
@@ -425,7 +462,7 @@ async def classify_venue(
 
     response = await client.messages.create(
         model=MODEL,
-        max_tokens=512,
+        max_tokens=1024,
         temperature=0.1,
         system=CLASSIFICATION_SYSTEM,
         messages=[{"role": "user", "content": user_message}],
@@ -452,6 +489,14 @@ async def classify_venue(
     reasoning = classification.get("reasoning", [])
     if not isinstance(reasoning, list) or len(reasoning) == 0:
         raise ValueError("Claude returned empty or invalid reasoning list.")
+
+    # Parse venue_profile (graceful fallback to None if missing or malformed)
+    raw_profile = classification.get("venue_profile")
+    classification["venue_profile"] = raw_profile if isinstance(raw_profile, dict) else None
+
+    # Parse sales_playbook (graceful fallback to empty list)
+    playbook = classification.get("sales_playbook", [])
+    classification["sales_playbook"] = playbook if isinstance(playbook, list) else []
 
     return classification
 
@@ -555,6 +600,8 @@ async def classify(request: ClassifyRequest, req: Request):
             segment=classification["segment"],
             confidence=classification["confidence"],
             reasoning=classification["reasoning"],
+            venue_profile=classification.get("venue_profile"),
+            sales_playbook=classification.get("sales_playbook", []),
         )
 
     except HTTPException:
